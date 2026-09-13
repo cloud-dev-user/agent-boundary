@@ -1,0 +1,106 @@
+# ---------------------------------------------------------------------------
+# BOUNDARY 3 — the network
+#
+# Policy at the application layer is advisory if the agent can simply open a
+# socket to the tool. These policies make the broker the only route that
+# exists, so "bypass the broker" is not a decision the agent gets to make.
+#
+# NOTE: kind's default CNI (kindnet) does NOT enforce NetworkPolicy. Applied
+# to a default kind cluster these objects exist and do nothing — which is a
+# neat illustration of this repo's whole argument. `make cluster` installs
+# Calico so they are actually enforced.
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: agent-boundary
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# DNS is the one thing everything needs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: agent-boundary
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+# The agent may egress to exactly one place: the broker.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-egress-broker-only
+  namespace: agent-boundary
+spec:
+  podSelector:
+    matchLabels: {tier: agent}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app: tool-broker}
+      ports:
+        - {protocol: TCP, port: 8081}
+---
+# The broker accepts traffic only from the agent tier.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: broker-ingress-from-agents
+  namespace: agent-boundary
+spec:
+  podSelector:
+    matchLabels: {app: tool-broker}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {tier: agent}
+      ports:
+        - {protocol: TCP, port: 8081}
+---
+# The broker may egress to the tools.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: broker-egress-tools
+  namespace: agent-boundary
+spec:
+  podSelector:
+    matchLabels: {app: tool-broker}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {tier: tool}
+      ports:
+        - {protocol: TCP, port: 8080}
+---
+# Tools accept traffic only from the broker. Not from agents. Not from
+# anything else in the namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tools-ingress-from-broker-only
+  namespace: agent-boundary
+spec:
+  podSelector:
+    matchLabels: {tier: tool}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app: tool-broker}
+      ports:
+        - {protocol: TCP, port: 8080}
